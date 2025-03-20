@@ -6,88 +6,118 @@ from comtypes import CLSCTX_ALL
 from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
 
 
-wCam, hCam = 640, 480
+def initialize_camera(width=640, height=480):
+    """Initialize webcam with specified dimensions"""
+    camera = cv2.VideoCapture(0)
+    camera.set(3, width)
+    camera.set(4, height)
+    time.sleep(1)
+
+    if not camera.isOpened():
+        raise RuntimeError("Failed to open camera")
+
+    return camera
 
 
-cap = cv2.VideoCapture(0)
-cap.set(3, wCam)
-cap.set(4,hCam)
-time.sleep(1)
-pTime = 0
+def initialize_audio_controller():
+    """Initialize Windows audio controller"""
+    devices = AudioUtilities.GetSpeakers()
+    interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+    volume_controller = interface.QueryInterface(IAudioEndpointVolume)
+    volume_range = volume_controller.GetVolumeRange()
 
-if not cap.isOpened():
-    print("Error: No se pudo abrir la cámara")
-    exit()
-
-
-detector = htm.handDetector(detectionConf=0.7, maxHands=1)
+    return volume_controller, volume_range
 
 
-devices = AudioUtilities.GetSpeakers()
-interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-volume = interface.QueryInterface(IAudioEndpointVolume)
+def calculate_hand_area(bbox):
+    """Calculate hand area from bounding box"""
+    width = bbox[2] - bbox[0]
+    height = bbox[3] - bbox[1]
+    return (width * height) // 100
 
 
-volRange = volume.GetVolumeRange()
-minVol = volRange[0]
-maxVol = volRange[1]
-vol = 0
-volBar = 400
-volPer = 0
-area = 0
-colorVol = (255,0,0)
-
-while True:
-    success, img = cap.read()
-
-    # Find Hand
-    img = detector.findHands(img)
-    lmList, bbox = detector.findPosition(img, draw=False)
-    if len(lmList) != 0:
-
-        # Filter based on size
-        area = (bbox[2]-bbox[0]) * (bbox[3]-bbox[1]) // 100
-        print(area)
-
-        if 250<area<1000:
-
-            # Find Distance between index and thumb
-            length, img, lineInfo = detector.findDistance(4,8, img)
-            print(length)
-            # Convert Volume
-            volBar = np.interp(length, [50, 200], [400, 150])
-            volPer = np.interp(length, [50, 200], [0, 100])
-
-            # Reduce Resolution to make it smoother
-            smoothness = 10
-            volPer = smoothness * round(volPer/smoothness)
-
-            # Check fingers up
-            fingers = detector.fingersUp()
-            print(fingers)
-            # if pinky is down set volume
-            if not fingers[4]:
-                volume.SetMasterVolumeLevelScalar(volPer / 100, None)
-                cv2.circle(img, (lineInfo[4], lineInfo[5]), 7, (0, 255, 0), cv2.FILLED)
-                colorVol = (0,255,0)
-            else:
-                colorVol = (255,0,0)
-
-    # Drawings
-    cv2.rectangle(img, (50, 150), (85, 400), (255, 0, 0), 3)
-    cv2.rectangle(img, (50, int(volBar)), (85, 400), (255, 0, 0), cv2.FILLED)
-    cv2.putText(img, f'{int(volPer)} %', (40, 450), cv2.FONT_HERSHEY_PLAIN, 1, (255, 0, 0), 2)
-
-    cVol = int(volume.GetMasterVolumeLevelScalar() * 100)
-    cv2.putText(img, f'Volume set: {int(cVol)}', (400,50), cv2.FONT_HERSHEY_PLAIN, 1, colorVol, 2)
-
-    # Frame rate
-    cTime = time.time()
-    fps = 1 / (cTime - pTime)
-    pTime = cTime
+def map_length_to_volume(length, min_length=50, max_length=200):
+    """Map hand gesture length to volume percentage and bar height"""
+    volume_bar = np.interp(length, [min_length, max_length], [400, 150])
+    volume_percentage = np.interp(length, [min_length, max_length], [0, 100])
+    return volume_bar, volume_percentage
 
 
-    cv2.putText(img, f'FPS: {int(fps)}', (40,50), cv2.FONT_HERSHEY_PLAIN, 1, (255,0,0), 2)
-    cv2.imshow("img", img)
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
+def smooth_volume(volume_percentage, smoothness=10):
+    """Apply smoothing to volume changes"""
+    return smoothness * round(volume_percentage / smoothness)
+
+
+def draw_volume_bar(image, bar_height, volume_percentage):
+    """Draw volume indicator bar and percentage"""
+    cv2.rectangle(image, (50, 150), (85, 400), (255, 0, 0), 3)
+    cv2.rectangle(image, (50, int(bar_height)), (85, 400), (255, 0, 0), cv2.FILLED)
+    cv2.putText(image, f'{int(volume_percentage)} %', (40, 450), cv2.FONT_HERSHEY_PLAIN, 1, (255, 0, 0), 2)
+
+
+def draw_fps(image, current_time, previous_time):
+    """Calculate and display FPS"""
+    fps = 1 / (current_time - previous_time)
+    cv2.putText(image, f'FPS: {int(fps)}', (40, 50), cv2.FONT_HERSHEY_PLAIN, 1, (255, 0, 0), 2)
+    return current_time
+
+
+def draw_current_volume(image, volume_controller, color):
+    """Display current system volume"""
+    current_volume = int(volume_controller.GetMasterVolumeLevelScalar() * 100)
+    cv2.putText(image, f'Volume set: {current_volume}', (400, 50), cv2.FONT_HERSHEY_PLAIN, 1, color, 2)
+
+
+def main():
+    camera = initialize_camera(640, 480)
+    hand_detector = htm.HandDetector(detection_confidence=0.7, max_hands=1)
+    volume_controller, volume_range = initialize_audio_controller()
+
+    prev_time = 0
+    volume_bar = 400
+    volume_percentage = 0
+    volume_color = (255, 0, 0)
+
+    while True:
+        success, image = camera.read()
+        if not success:
+            print("Failed to capture frame")
+            break
+
+        image = hand_detector.find_hands(image)
+        landmarks, bounding_box = hand_detector.find_position(image, draw=False)
+
+        if landmarks:
+            hand_area = calculate_hand_area(bounding_box)
+
+            if 250 < hand_area < 1000:
+                length, image, line_info = hand_detector.find_distance(4, 8, image)
+
+                volume_bar, volume_percentage = map_length_to_volume(length)
+                volume_percentage = smooth_volume(volume_percentage)
+
+                fingers = hand_detector.fingers_up()
+
+                if not fingers[4]:
+                    volume_controller.SetMasterVolumeLevelScalar(volume_percentage / 100, None)
+                    cv2.circle(image, (line_info[4], line_info[5]), 7, (0, 255, 0), cv2.FILLED)
+                    volume_color = (0, 255, 0)
+                else:
+                    volume_color = (255, 0, 0)
+
+        draw_volume_bar(image, volume_bar, volume_percentage)
+        draw_current_volume(image, volume_controller, volume_color)
+
+        current_time = time.time()
+        prev_time = draw_fps(image, current_time, prev_time)
+
+        cv2.imshow("Volume Control", image)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+    camera.release()
+    cv2.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    main()
