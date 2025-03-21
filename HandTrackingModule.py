@@ -158,11 +158,11 @@ class HandDetector:
         center_x, center_y = (x1 + x2) // 2, (y1 + y2) // 2
 
         if draw:
-
-            cv2.circle(image, (x1, y1), 7, (255, 0, 255), cv2.FILLED)
-            cv2.circle(image, (x2, y2), 7, (255, 0, 255), cv2.FILLED)
-            cv2.line(image, (x1, y1), (x2, y2), (255, 0, 255), 3)
-            cv2.circle(image, (center_x, center_y), 7, (255, 0, 255), cv2.FILLED)
+            # Usar siempre color azul (BGR) y reducir grosor a 2
+            cv2.circle(image, (x1, y1), 10, (255, 0, 0), cv2.FILLED)
+            cv2.circle(image, (x2, y2), 10, (255, 0, 0), cv2.FILLED)
+            cv2.line(image, (x1, y1), (x2, y2), (255, 0, 0), 2)  # Línea más fina (grosor 2)
+            cv2.circle(image, (center_x, center_y), 7, (255, 0, 0), cv2.FILLED)
 
 
         distance = math.hypot(x2 - x1, y2 - y1)
